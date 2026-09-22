@@ -258,8 +258,12 @@ def build_processor_message(
         if _DATA_URI_RE.match(ref_audio) is None:
             reference = [reference_encoder.encode(ref_audio)]
         else:
-            # Data-URI refs through the same LRU (bytes: keyspace).
+            # Data-URI refs use the same waveform-keyed LRU.
             reference = [reference_encoder.encode_data_uri(ref_audio)]
+    elif reference_encoder is not None and isinstance(
+        ref_audio, (bytes, bytearray, memoryview)
+    ):
+        reference = [reference_encoder.encode_bytes(ref_audio)]
     else:
         reference = reference_for_processor(processor, ref_audio)
     return processor.build_user_message(
