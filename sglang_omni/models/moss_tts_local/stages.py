@@ -288,10 +288,10 @@ class BatchedReferenceEncoder:
     @classmethod
     def check_reference_duration(cls, path: str) -> None:
         try:
-            import torchaudio
+            import soundfile as sf
 
-            info = torchaudio.info(path)
-            duration = info.num_frames / max(int(info.sample_rate), 1)
+            info = sf.info(path)
+            duration = info.frames / max(int(info.samplerate), 1)
         except Exception:
             return  # unreadable files fail with a clearer error in the codec
         if duration > cls.MAX_REFERENCE_SECONDS:
@@ -465,6 +465,8 @@ class CanonicalReferenceEncoder:
     def load(
         self, source: str | bytes | bytearray | memoryview
     ) -> MossLocalReferenceInput:
+        if isinstance(source, str) and os.path.isfile(source):
+            BatchedReferenceEncoder.check_reference_duration(source)
         waveform = load_audio(
             source,
             source_name="MOSS-TTS Local reference",

@@ -1780,6 +1780,29 @@ def test_cached_reference_encoder_duration_gate(monkeypatch):
     assert len(enc._service._inflight) == 0
 
 
+def test_cached_reference_file_duration_gate_before_decode(tmp_path, monkeypatch):
+    import soundfile as sf
+
+    from sglang_omni.models.moss_tts_local import stages
+
+    ref = tmp_path / "long.wav"
+    ref.write_bytes(b"reference")
+    info = types.SimpleNamespace(frames=200 * 48000, samplerate=48000)
+    monkeypatch.setattr(sf, "info", lambda path: info)
+    monkeypatch.setattr(
+        stages,
+        "load_audio",
+        lambda *args, **kwargs: pytest.fail("oversized file was decoded"),
+    )
+    audio_encoder = types.SimpleNamespace(
+        device="cpu", sample_rate=48000, number_channels=1
+    )
+    canonical = stages.CanonicalReferenceEncoder(audio_encoder, n_vq=N_VQ)
+
+    with pytest.raises(ValueError, match="100"):
+        canonical.load(str(ref))
+
+
 def test_cached_reference_encoder_keys_loaded_waveform(tmp_path):
     from sglang_omni.models.moss_tts_local.stages import MossLocalReferenceEncoder
 
