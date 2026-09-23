@@ -447,12 +447,20 @@ class CanonicalReferenceEncoder:
     def __init__(self, audio_encoder: Any, *, n_vq: int) -> None:
         self._audio_encoder = audio_encoder
         self._n_vq = int(n_vq)
-        self._lock = threading.Lock()
         self._stream = None
         device = torch.device(audio_encoder.device)
         if device.type == "cuda":
             self._stream = torch.cuda.Stream(device=device)
             self._stream.wait_stream(torch.cuda.current_stream(device))
+        self._queue: queue.Queue[
+            tuple[MossLocalReferenceInput, concurrent.futures.Future[torch.Tensor]]
+        ] = queue.Queue()
+        self._thread = threading.Thread(
+            target=self.worker,
+            name="moss-local-canonical-ref-encode",
+            daemon=True,
+        )
+        self._thread.start()
 
     def load(
         self, source: str | bytes | bytearray | memoryview
@@ -477,12 +485,24 @@ class CanonicalReferenceEncoder:
         )
 
     def encode_input(self, item: MossLocalReferenceInput) -> torch.Tensor:
-        with self._lock, torch.cuda.stream(self._stream):
-            return self._audio_encoder.encode_waveform(
-                item.waveform,
-                item.sample_rate,
-                num_quantizers=self._n_vq,
-            )
+        future: concurrent.futures.Future[torch.Tensor] = concurrent.futures.Future()
+        self._queue.put((item, future))
+        return future.result(timeout=self.ENCODE_TIMEOUT_S)
+
+    def worker(self) -> None:
+        while True:
+            item, future = self._queue.get()
+            try:
+                with torch.cuda.stream(self._stream):
+                    result = self._audio_encoder.encode_waveform(
+                        item.waveform,
+                        item.sample_rate,
+                        num_quantizers=self._n_vq,
+                    )
+            except Exception as exc:
+                future.set_exception(exc)
+            else:
+                future.set_result(result)
 
 
 class MossLocalReferenceEncodeHook(TensorReferenceEncodeHook[MossLocalReferenceInput]):
