@@ -1670,10 +1670,6 @@ class MossAudioEncoder:
             )
         codes = encoded.audio_codes
         lengths = encoded.audio_codes_lengths
-        if codes is None or lengths is None:
-            raise RuntimeError(
-                "MOSS audio encoder returned empty audio_codes/audio_codes_lengths"
-            )
         valid_length = int(lengths[0].detach().to("cpu"))
         return (
             codes[:, 0, :valid_length]

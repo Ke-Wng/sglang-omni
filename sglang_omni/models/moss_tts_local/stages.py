@@ -454,7 +454,10 @@ class CanonicalReferenceEncoder:
             self._stream.wait_stream(torch.cuda.current_stream(device))
         self._queue: queue.Queue[
             tuple[MossLocalReferenceInput, concurrent.futures.Future[torch.Tensor]]
+            | None
         ] = queue.Queue()
+        self._lifecycle_lock = threading.Lock()
+        self._closed = False
         self._thread = threading.Thread(
             target=self.worker,
             name="moss-local-canonical-ref-encode",
@@ -462,9 +465,20 @@ class CanonicalReferenceEncoder:
         )
         self._thread.start()
 
+    def close(self) -> None:
+        with self._lifecycle_lock:
+            if self._closed:
+                return
+            self._closed = True
+            self._queue.put(None)
+        self._thread.join(timeout=5.0)
+
     def load(
         self, source: str | bytes | bytearray | memoryview
     ) -> MossLocalReferenceInput:
+        with self._lifecycle_lock:
+            if self._closed:
+                raise RuntimeError("MOSS-TTS Local reference encoder is closed")
         if isinstance(source, str) and os.path.isfile(source):
             BatchedReferenceEncoder.check_reference_duration(source)
         waveform = load_audio(
@@ -488,12 +502,18 @@ class CanonicalReferenceEncoder:
 
     def encode_input(self, item: MossLocalReferenceInput) -> torch.Tensor:
         future: concurrent.futures.Future[torch.Tensor] = concurrent.futures.Future()
-        self._queue.put((item, future))
+        with self._lifecycle_lock:
+            if self._closed:
+                raise RuntimeError("MOSS-TTS Local reference encoder is closed")
+            self._queue.put((item, future))
         return future.result(timeout=self.ENCODE_TIMEOUT_S)
 
     def worker(self) -> None:
         while True:
-            item, future = self._queue.get()
+            entry = self._queue.get()
+            if entry is None:
+                return
+            item, future = entry
             try:
                 with torch.cuda.stream(self._stream):
                     result = self._audio_encoder.encode_waveform(
@@ -536,6 +556,9 @@ class MossLocalReferenceEncodeHook(TensorReferenceEncodeHook[MossLocalReferenceI
     def input_key(self, item: MossLocalReferenceInput) -> str:
         return item.content_key
 
+    def close(self) -> None:
+        self._encoder.close()
+
 
 class MossLocalReferenceEncoder:
     def __init__(
@@ -568,6 +591,9 @@ class MossLocalReferenceEncoder:
 
     def stats(self) -> dict[str, int]:
         return self._service.stats()
+
+    def close(self) -> None:
+        self._service.close()
 
 
 def create_preprocessing_executor(

@@ -1209,6 +1209,36 @@ def test_create_preprocessing_executor_uses_shared_encoder(monkeypatch):
     )
 
 
+def test_replacing_preprocessing_context_closes_reference_workers():
+    from sglang_omni.models.moss_tts_local import stages
+
+    audio_encoder = types.SimpleNamespace(
+        device="cpu", sample_rate=48000, number_channels=1
+    )
+    workers = [
+        stages.CanonicalReferenceEncoder(audio_encoder, n_vq=N_VQ) for _ in range(2)
+    ]
+    encoders = [
+        stages.MossLocalReferenceEncoder(worker, n_vq=N_VQ) for worker in workers
+    ]
+
+    try:
+        set_moss_tts_local_preprocessing_context(
+            processor=_FakeProcessor(), reference_encoder=encoders[0]
+        )
+        set_moss_tts_local_preprocessing_context(
+            processor=_FakeProcessor(), reference_encoder=encoders[1]
+        )
+        assert not workers[0]._thread.is_alive()
+
+        clear_moss_tts_local_preprocessing_context()
+        assert not workers[1]._thread.is_alive()
+    finally:
+        clear_moss_tts_local_preprocessing_context()
+        for encoder in encoders:
+            encoder.close()
+
+
 def test_preprocess_and_result_adapter():
     set_moss_tts_local_preprocessing_context(processor=_FakeProcessor())
     try:
@@ -1801,6 +1831,7 @@ def test_cached_reference_file_duration_gate_before_decode(tmp_path, monkeypatch
 
     with pytest.raises(ValueError, match="100"):
         canonical.load(str(ref))
+    canonical.close()
 
 
 def test_cached_reference_encoder_keys_loaded_waveform(tmp_path):

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -95,19 +96,40 @@ class PreprocessingContext:
 _QUEUE: PreparedRequestQueue[PreprocessingContext, MossTTSLocalPreparedRequest] = (
     PreparedRequestQueue()
 )
+_CONTEXT_LIFECYCLE_LOCK = threading.Lock()
 MOSS_STREAM_TRANSPORT_BATCH_FRAMES = 5
+
+
+def close_moss_tts_local_preprocessing_context(
+    context: PreprocessingContext | None,
+) -> None:
+    if context is None:
+        return
+    close = getattr(context.reference_encoder, "close", None)
+    if callable(close):
+        close()
 
 
 def set_moss_tts_local_preprocessing_context(
     *, processor: Any, reference_encoder: Any = None
 ) -> None:
-    _QUEUE.set_context(
-        PreprocessingContext(processor=processor, reference_encoder=reference_encoder)
-    )
+    with _CONTEXT_LIFECYCLE_LOCK:
+        previous = _QUEUE.snapshot().context
+        _QUEUE.set_context(
+            PreprocessingContext(
+                processor=processor, reference_encoder=reference_encoder
+            )
+        )
+        if previous is not None and previous.reference_encoder is reference_encoder:
+            return
+        close_moss_tts_local_preprocessing_context(previous)
 
 
 def clear_moss_tts_local_preprocessing_context() -> None:
-    _QUEUE.clear_context()
+    with _CONTEXT_LIFECYCLE_LOCK:
+        previous = _QUEUE.snapshot().context
+        _QUEUE.clear_context()
+        close_moss_tts_local_preprocessing_context(previous)
 
 
 def cleanup_prepared_moss_tts_local_request(request_id: str) -> None:
